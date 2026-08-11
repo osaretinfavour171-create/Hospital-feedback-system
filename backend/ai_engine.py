@@ -5,6 +5,8 @@ Modes:
   * groq    — live API calls (llama-3.3-70b-versatile + whisper-large-v3)
   * offline — rule-based extractor (fully functional demo)
 """
+from __future__ import annotations
+
 import json
 import re
 from typing import Any, Dict, Optional

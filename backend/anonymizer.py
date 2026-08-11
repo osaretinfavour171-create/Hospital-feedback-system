@@ -3,6 +3,8 @@
 Masks personally identifiable information (patient phone numbers) prior to
 persistence, while keeping records linkable for follow-up care.
 """
+from __future__ import annotations
+
 import hashlib
 
 from config import SALT_SECRET

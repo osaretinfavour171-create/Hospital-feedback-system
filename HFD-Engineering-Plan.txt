@@ -1,0 +1,190 @@
+Engineering Plan: Lightweight Demo Edition
+Project Name: Omnichannel Hospital Feedback & Care Quality Platform (Demo Edition)
+System Architecture: Monolithic Fast-Path Micro-Engine
+Target Deployment: Single-instance Container / Local Demo Engine
+Document Version: 1.0
+---
+1. System Architecture Overview
+The lightweight edition combines fast ingestion, lightweight AI classification, local SQLite persistence, and an interactive React frontend into a streamlined, single-repository system.
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                               FRONTEND LAYER                                   │
+│                           React + Tailwind CSS                                  │
+│                                                                                 │
+│   ┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐  │
+│   │  Nurse-Assisted Entry│  │ WhatsApp Simulator   │  │ Executive Dashboard  │  │
+│   └──────────┬───────────┘  └──────────┬───────────┘  └──────────┬───────────┘  │
+└──────────────┼─────────────────────────┼─────────────────────────┼──────────────┘
+│                         │                         │
+└─────────────────────────┼─────────────────────────┘
+│ HTTP / REST API
+┌────────────────────────────────────────▼────────────────────────────────────────┐
+│                               BACKEND ENGINE                                    │
+│                           FastAPI (Python 3.11)                                 │
+│                                                                                 │
+│   ┌─────────────────────────────────────────────────────────────────────────┐   │
+│   │                       API Router & Validation                           │   │
+│   └──────────────┬──────────────────────────────────────────┬───────────────┘   │
+│                  │                                          │                   │
+│                  ▼                                          ▼                   │
+│   ┌─────────────────────────────┐            ┌──────────────────────────────┐   │
+│   │     AI Classification       │            │      PII Anonymizer          │   │
+│   │  (Groq Llama-3.3-70b-v)     │            │    (SHA-256 Phone Hash)     │   │
+│   └──────────────┬──────────────┘            └──────────────┬───────────────┘   │
+│                  │                                          │                   │
+└──────────────────┼──────────────────────────────────────────┼───────────────────┘
+│                                          │
+└────────────────────┬─────────────────────┘
+│
+┌───────────────────────────────────────▼─────────────────────────────────────────┐
+│                               STORAGE LAYER                                     │
+│                      SQLite 3 (hospital_demo.db)                                │
+│                                                                                 │
+│   ┌──────────────────────┐  ┌──────────────────────┐  �l──────────────────────┐  │
+│   │     departments      │  │   patient_feedback   │  │   hospital_alerts    │  │
+│   └──────────────────────┘  └──────────────────────┘  └──────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────────┘
+---
+2. Directory Structure
+hospital-feedback-demo/
+├── backend/
+│   ├── app/
+│   │   ├── __init__.py
+│   │   ├── main.py              # FastAPI application & REST endpoints
+│   │   ├── ai_engine.py         # Groq LLM client & structured JSON extractor
+│   │   ├── database.py          # SQLite connection, schema init & CRUD
+│   │   ├── anonymizer.py        # SHA-256 PII masking for phone numbers
+│   │   └── config.py            # Environment variables & constants
+│   ├── requirements.txt         # Python dependencies
+│   └── .env.example             # Template for local environment configuration
+├── frontend/
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── NurseEntryModal.jsx     # Structured form for ward nurses
+│   │   │   ├── WhatsAppSimulator.jsx   # Chat interface with AI log sidebar
+│   │   │   └── ExecutiveDashboard.jsx  # CSAT metrics, heatmap & alert queue
+│   │   ├── App.jsx              # Main tab-switch shell & state management
+│   │   ├── index.css            # Tailwind directives & design tokens
+│   │   └── main.jsx             # React DOM entry point
+│   ├── package.json
+│   ├── tailwind.config.js
+│   └── vite.config.js
+└── README.md                    # Quickstart guide & setup instructions
+---
+3. Technology Stack & Key Dependencies
+3.1 Backend Stack
+**Language:** Python 3.11+
+**Web Framework:** `FastAPI` (v0.110+)
+**ASGI Server:** `Uvicorn`
+**AI / LLM Engine:** Groq API SDK (`groq` v0.5+) utilizing `llama-3.3-70b-versatile`
+**Database Driver:** Standard library `sqlite3` with `PRAGMA foreign_keys = ON;`
+**PII Masking:** Standard library `hashlib` (SHA-256)
+3.2 Frontend Stack
+**Framework:** React 18+ (bundled with `Vite`)
+**Styling:** `Tailwind CSS` v3+
+**Icons:** `Lucide React`
+**HTTP Client:** Native `fetch` API
+---
+4. REST API Endpoint Specifications
+4.1 Ingestion Endpoints
+`POST /api/feedback/nurse`
+Submits feedback gathered via the Nurse-Assisted Entry modal.
+**Request Body:**
+{
+"visit_id": "VIS-2026-104",
+"department_id": "PHARMACY",
+"overall_rating": 2,
+"category_tags": ["LONG_WAIT", "STAFF_COURTESY"],
+"raw_comment": "Patient waited 2 hours for prescriptions.",
+"is_anonymous": false,
+"patient_phone": "+2348012345678"
+}
+**Response (`201 Created`):**
+{
+"status": "success",
+"feedback_id": "fb-a91d204f",
+"alert_generated": true,
+"alert_id": "alt-88b12f4a"
+}
+---
+`POST /api/feedback/whatsapp`
+Processes unstructured conversational feedback from the WhatsApp simulator, invoking Groq LLM for real-time classification.
+**Request Body:**
+{
+"patient_phone": "+2348012345678",
+"message_text": "I was at the Emergency room today. Doctor was great but waited over 3 hours to get blood test results back!"
+}
+**Response (`200 OK`):**
+{
+"status": "success",
+"feedback_id": "fb-4b2c1102",
+"extracted_data": {
+"department_id": "EMERGENCY",
+"overall_rating": 2,
+"sentiment_score": -0.75,
+"category_tags": ["LONG_WAIT"],
+"summary": "3-hour delay in receiving lab test results in Emergency.",
+"is_critical": false
+},
+"patient_reply": "Thank you for sharing. Your feedback regarding EMERGENCY has been logged (Ref: #FB-4B2C1102).",
+"alert_generated": true
+}
+---
+4.2 Dashboard & Management Endpoints
+`GET /api/dashboard/summary`
+Retrieves aggregated CSAT, sentiment, and volume metrics by department.
+**Response (`200 OK`):**
+{
+"overall_csat": 3.8,
+"total_feedback": 42,
+"open_alerts_count": 3,
+"department_metrics": [
+{
+"department_id": "OPD",
+"department_name": "Outpatient Department",
+"total_count": 18,
+"average_csat": 4.2,
+"average_sentiment": 0.65,
+"negative_count": 2
+},
+{
+"department_id": "EMERGENCY",
+"department_name": "Accident & Emergency",
+"total_count": 12,
+"average_csat": 2.1,
+"average_sentiment": -0.82,
+"negative_count": 8
+}
+]
+}
+---
+`GET /api/alerts`
+Returns active and resolved escalation alerts.
+**Query Parameters:** `status=OPEN` (Optional filter)
+**Response (`200 OK`):**
+[
+{
+"id": "alt-88b12f4a",
+"feedback_id": "fb-a91d204f",
+"department_id": "PHARMACY",
+"severity": "HIGH",
+"issue_summary": "Patient waited 2 hours for prescriptions.",
+"status": "OPEN",
+"created_at": "2026-08-08 14:05:12"
+}
+]
+---
+`PATCH /api/alerts/{alert_id}/resolve`
+Updates an open escalation alert to resolved.
+**Response (`200 OK`):**
+{
+"status": "success",
+"alert_id": "alt-88b12f4a",
+"new_status": "RESOLVED"
+}
+---
+5. Implementation Roadmap & Execution Checklist
+--- | --- | --- | ---
+**Phase 1** | **Database & Core Backend** | 1. Create SQLite schema (`schema.sql`)<br>2. Build `database.py` initialization scripts<br>3. Implement PII SHA-256 hashing in `anonymizer.py` | Executing `python database.py` generates `hospital_demo.db` with seeded departments.
+**Phase 2** | **AI Pipeline & FastAPI** | 1. Configure Groq client with JSON response schema enforcement<br>2. Create FastAPI routes (`/nurse`, `/whatsapp`, `/dashboard`)<br>3. Add automatic alert trigger logic (rating ≤ 2) | Sending an unstructured message via Postman returns classified JSON and populates SQLite.
+**Phase 3** | **React Frontend** | 1. Setup Vite + Tailwind CSS shell<br>2. Build `NurseEntryModal`, `WhatsAppSimulator`, and `ExecutiveDashboard`<br>3. Connect API calls to FastAPI backend | All three tabs functional with real-time UI updates upon submitting feedback or resolving alerts.
+**Phase 4** | **Testing & Polish** | 1. End-to-end user flow testing<br>2. Error handling for API timeouts / missing fields | Complete feedback lifecycle executes in < 1 second.

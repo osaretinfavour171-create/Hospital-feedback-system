@@ -1,0 +1,142 @@
+Product Requirements Document (PRD): Lightweight Demo Architecture
+Project Name: Omnichannel Hospital Feedback & Care Quality Platform (Demo / PoC Edition)
+Target Host Machine: Standard Personal Computer (Intel i5/i7 or Apple Silicon, 8GB+ RAM, No GPU required)
+Document Version: 1.0
+Estimated Build Time: 1 to 2 Days
+Total Hosting Cost: $0.00
+---
+1. Product Vision & Scope
+1.1 Objective
+The goal of this lightweight Proof of Concept (PoC) is to demonstrate the complete end-to-end functionality of the Omnichannel Hospital Feedback Platform on a single personal computer. It demonstrates dual-channel feedback collection, AI-powered sentiment and category extraction, safety guardrails, real-time alert escalation, and an executive quality dashboard—without demanding enterprise server hardware or incurring cloud service costs.
+1.2 In-Scope vs. Out-of-Scope (Demo vs. Production)
+--- | --- | ---
+**Hosting Environment** | Multi-node On-Premise Hospital Server | Local PC (Single Terminal / Docker Desktop)
+**LLM Processing** | Local GPU-accelerated Ollama | **Groq Cloud API** (`llama-3.3-70b-versatile`) — Free Tier
+**Voice Transcription** | Local `whisper.cpp` engine | **Groq Whisper API** (`whisper-large-v3`) — Free Tier
+**Database** | PostgreSQL 15+ with Custom ENUMs & Views | **SQLite** (`hospital_demo.db`)
+**WhatsApp Gateway** | Self-hosted OpenWA / Meta Business API | **Twilio Sandbox for WhatsApp** or **Built-in Web Simulator**
+**Frontends** | Distributed Micro-frontends | **Single React (Vite) App** with Nurse & Admin Tab Switcher
+---
+2. Core User Stories & Functional Requirements
+2.1 User Stories
+**As a Patient (WhatsApp Channel):** I want to send a text message or record a brief voice note describing my hospital visit so that my feedback is heard without filling out long web forms.
+**As a Ward Nurse (SmartClinic EHR Channel):** I want to log a quick 3-step feedback entry on behalf of a discharged patient so that their rating is recorded in under 30 seconds.
+**As a Hospital Administrator (Dashboard Channel):** I want to see an immediate breakdown of department CSAT scores and receive instant alerts when low ratings or safety concerns occur.
+2.2 System Functional Requirements
+┌───────────────────────────┐
+│ Inbound Feedback Input    │
+│ (WhatsApp or Nurse Modal) │
+└─────────────┬─────────────┘
+│
+▼
+┌───────────────────────────┐
+│ FastAPI Local Gateway     │
+│ - SHA-256 PII Redaction   │
+└─────────────┬─────────────┘
+│
+▼
+┌───────────────────────────┐
+│ Groq Cloud Engine         │
+│ - Audio Transcript        │
+│ - Guardrail Analysis      │
+│ - Rating & Tag Extraction │
+└─────────────┬─────────────┘
+│
+▼
+┌───────────────────────────┐  Yes  ┌───────────────────────────┐
+│ Trigger Hospital Alert    │ ◄─────┤ Critical Issue /          │
+│ (Severity: HIGH/CRITICAL) │       │ Overall Rating <= 2?      │
+└───────────────────────────┘       └─────────────┬─────────────┘
+│ No
+▼
+┌───────────────────────────┐
+│ Save to SQLite DB &       │
+│ Refresh Admin Dashboard   │
+└───────────────────────────┘
+FR-1: PII Sanitization & Safety Guardrails
+The backend MUST hash the patient's phone number using `SHA-256` prior to persisting the record.
+The LLM pipeline MUST evaluate incoming narrative text against a medical advice guardrail. If a patient asks for medical diagnosis, prescriptions, or dosage rules, the system MUST return a friendly refusal message and refrain from treating the message as feedback.
+FR-2: AI Data Extraction
+The AI engine MUST parse unstructured text or audio transcripts and output a structured JSON object adhering to the following interface:
+{
+"department_id": "PHARMACY",
+"overall_rating": 2,
+"sentiment_score": -0.65,
+"category_tags": ["LONG_WAIT", "DIRTY_FACILITY"],
+"summary": "Patient experienced a 2-hour wait time at the pharmacy and noted the waiting area was unclean.",
+"is_critical_issue": false
+}
+FR-3: Automated Escalation Rules
+If `overall_rating <= 2` OR `is_critical_issue == true`, the system MUST automatically create a corresponding record in the `hospital_alerts` table with `status = 'OPEN'`.
+---
+3. Data Schema Specification (SQLite)
+The demo utilizes a lightweight single-file SQLite database (`hospital_demo.db`).
+-- Master Departments Lookup Table
+CREATE TABLE IF NOT EXISTS departments (
+id TEXT PRIMARY KEY,               -- 'OPD', 'PHARMACY', 'EMERGENCY', 'BILLING', 'WARDS'
+name TEXT NOT NULL
+);
+-- Seed initial records
+INSERT OR IGNORE INTO departments (id, name) VALUES
+('OPD', 'Outpatient Department'),
+('EMERGENCY', 'Accident & Emergency'),
+('PHARMACY', 'Main Pharmacy'),
+('BILLING', 'Accounts & Revenue'),
+('WARDS', 'Inpatient Wards');
+-- Central Feedback Table
+CREATE TABLE IF NOT EXISTS patient_feedback (
+id TEXT PRIMARY KEY,               -- UUID string
+visit_id TEXT NOT NULL,
+department_id TEXT NOT NULL,
+channel TEXT NOT NULL,              -- 'WHATSAPP_BOT' or 'NURSE_ASSISTED'
+patient_phone_hash TEXT,
+overall_rating INTEGER NOT NULL,
+sentiment_score REAL,              -- -1.00 to +1.00
+category_tags TEXT,                -- Comma-separated or JSON string
+raw_comment TEXT,
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+FOREIGN KEY(department_id) REFERENCES departments(id)
+);
+-- Real-Time Operational Alerts
+CREATE TABLE IF NOT EXISTS hospital_alerts (
+id TEXT PRIMARY KEY,
+feedback_id TEXT NOT NULL,
+department_id TEXT NOT NULL,
+severity TEXT NOT NULL,             -- 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'
+issue_summary TEXT NOT NULL,
+status TEXT DEFAULT 'OPEN',         -- 'OPEN', 'RESOLVED'
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+FOREIGN KEY(feedback_id) REFERENCES patient_feedback(id)
+);
+---
+4. Technology Stack & Free-Tier Configuration
+--- | --- | ---
+**Backend API** | Python 3.10+ / FastAPI / Uvicorn | 100% open-source local framework.
+**AI Processing** | `groq` Python SDK | Groq Free Tier allows 14,400 requests/day ($0 cost).
+**Transcription** | Groq Whisper API (`whisper-large-v3`) | Free transcription processing via Groq API key ($0 cost).
+**Database** | SQLite3 (Built-in Python) | Zero setup; stored locally in project root as a `.db` file.
+**Frontend UI** | React 18 + Vite + Tailwind CSS | Single-page application serving Nurse Modal & Admin Views.
+---
+5. Non-Functional Requirements (NFRs)
+1. **Memory & CPU Footprint:** The entire backend and frontend services combined MUST consume less than **500 MB RAM** and under **10% CPU utilization** on standard laptops during idle/active states.
+2. **End-to-End Latency Target:**
+Text Processing Pipeline (FastAPI → Groq LLM → SQLite Write): ≤ 1.0 second.
+Audio Processing Pipeline (FastAPI → Groq Whisper → Groq LLM → SQLite Write): ≤ 2.0 seconds.
+Dashboard Refresh: ≤ 100 ms.
+3. **Portability:** The entire project MUST run locally via standard Python terminal commands without requiring Docker desktop or complex background service daemons.
+---
+6. Implementation & Demo Execution Flow
+[ Open Terminal ]
+│
+├── Step 1: Run `python -m uvicorn main:app --reload`
+└── Step 2: Run `npm run dev`
+│
+▼
+[ Open Browser: http://localhost:5173 ]
+│
+├── Tab A: "Nurse-Assisted Entry" (Simulates SmartClinic Modal)
+├── Tab B: "WhatsApp Simulator" (Simulates Text/Voice Notes)
+└── Tab C: "Executive Dashboard" (Real-time CSAT Metrics & Alerts)
+1. **Nurse Log Demo:** Navigate to **Tab A**, select a rating of `1 - Poor`, choose `LONG_WAIT`, enter a short comment, and click Submit.
+2. **Automated Escalation Demo:** Immediately switch to **Tab C (Executive Dashboard)** to demonstrate the instant creation of a `HIGH` severity alert in the Emergency / Pharmacy queue.
+3. **WhatsApp / Voice Demo:** Navigate to **Tab B**, record or type a voice note, submit it, and view the automated extraction of sentiment scores and category tags.

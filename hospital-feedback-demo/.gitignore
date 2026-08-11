@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+backend/.env
+backend/hospital_demo.db
+
+# Node
+node_modules/
+frontend/dist/
+.vercel/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.log

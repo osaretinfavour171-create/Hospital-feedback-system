@@ -1,0 +1,381 @@
+Spec-Driven Development (SDD) Specification: Lightweight Demo Edition
+Project Name: Omnichannel Hospital Feedback & Care Quality Platform (Demo / PoC Edition)
+Document Version: 1.0
+Specification Target: OpenAPI 3.1.0, Gherkin BDD Features, and JSON Schema Contracts
+Workflow Paradigm: Spec-First Development (OpenAPI Contract & Feature Files → Code Generation & Contract Testing)
+---
+1. Executable OpenAPI 3.1.0 Contract Specification
+This specification defines the strict network contract for the FastAPI gateway. All requests, responses, headers, and schemas are strictly validated against this interface.
+openapi: 3.1.0
+info:
+title: Omnichannel Hospital Feedback API (Lightweight Demo)
+description: Executable API specification for dual-channel hospital feedback ingestion, AI classification, and escalation management.
+version: 1.0.0
+paths:
+/api/v1/feedback/nurse:
+post:
+summary: Log Nurse-Assisted Feedback
+operationId: logNurseFeedback
+description: Ingests feedback collected directly by clinical staff via the SmartClinic Modal.
+requestBody:
+required: true
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/NurseFeedbackRequest'
+responses:
+'200':
+description: Feedback recorded successfully
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/FeedbackResponse'
+'422':
+$ref: '#/components/responses/ValidationError'
+/api/v1/feedback/whatsapp/text:
+post:
+summary: Process WhatsApp Text Feedback
+operationId: processWhatsAppText
+description: Accepts patient WhatsApp text message, runs PII redaction, and passes through Groq LLM extraction.
+requestBody:
+required: true
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/WhatsAppTextRequest'
+responses:
+'200':
+description: WhatsApp feedback processed and classified
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/FeedbackResponse'
+'422':
+$ref: '#/components/responses/ValidationError'
+/api/v1/feedback/whatsapp/audio:
+post:
+summary: Transcribe & Process WhatsApp Audio Note
+operationId: processWhatsAppAudio
+description: Uploads binary audio file, transcribes via Groq Whisper API, and extracts structured feedback metadata.
+requestBody:
+required: true
+content:
+multipart/form-data:
+schema:
+type: object
+required:
+phone_number
+audio_file
+properties:
+phone_number:
+type: string
+example: "+2348012345678"
+audio_file:
+type: string
+format: binary
+responses:
+'200':
+description: Audio transcribed and feedback classified
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/FeedbackResponse'
+/api/v1/dashboard/metrics:
+get:
+summary: Get Aggregate CSAT & Operational Metrics
+operationId: getDashboardMetrics
+description: Retrieves overall CSAT, response counts, open alert metrics, and department heatmaps.
+responses:
+'200':
+description: Aggregated metrics payload
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/MetricsSummary'
+/api/v1/dashboard/alerts:
+get:
+summary: List Hospital Escalation Alerts
+operationId: getHospitalAlerts
+parameters:
+name: status
+in: query
+required: false
+schema:
+type: string
+enum: [OPEN, RESOLVED]
+default: OPEN
+responses:
+'200':
+description: List of active or historical alerts
+content:
+application/json:
+schema:
+type: array
+items:
+$ref: '#/components/schemas/AlertObject'
+/api/v1/alerts/{alert_id}:
+patch:
+summary: Update Alert Resolution Status
+operationId: updateAlertStatus
+parameters:
+name: alert_id
+in: path
+required: true
+schema:
+type: string
+requestBody:
+required: true
+content:
+application/json:
+schema:
+type: object
+required:
+status
+properties:
+status:
+type: string
+enum: [OPEN, RESOLVED]
+responses:
+'200':
+description: Alert status updated successfully
+content:
+application/json:
+schema:
+$ref: '#/components/schemas/AlertObject'
+components:
+responses:
+ValidationError:
+description: Input validation failed
+content:
+application/json:
+schema:
+type: object
+properties:
+detail:
+type: array
+items:
+type: object
+schemas:
+NurseFeedbackRequest:
+type: object
+required:
+visit_id
+department_id
+overall_rating
+properties:
+visit_id:
+type: string
+example: "VIS-2026-104"
+department_id:
+type: string
+enum: [OPD, EMERGENCY, PHARMACY, BILLING, WARDS]
+example: "PHARMACY"
+overall_rating:
+type: integer
+minimum: 1
+maximum: 5
+example: 2
+category_tags:
+type: array
+items:
+type: string
+example: ["LONG_WAIT", "DIRTY_FACILITY"]
+raw_comment:
+type: string
+nullable: true
+example: "Waited 2 hours at pharmacy."
+is_anonymous:
+type: boolean
+default: false
+WhatsAppTextRequest:
+type: object
+required:
+phone_number
+message_text
+properties:
+phone_number:
+type: string
+pattern: '^\+[1-9]\d{1,14}$'
+example: "+2348012345678"
+message_text:
+type: string
+minLength: 3
+example: "The emergency ward staff was polite but medicine took too long."
+FeedbackResponse:
+type: object
+required:
+status
+feedback_id
+guardrail_triggered
+escalation_triggered
+properties:
+status:
+type: string
+example: "success"
+feedback_id:
+type: string
+example: "fb-uuid-9921"
+guardrail_triggered:
+type: boolean
+example: false
+escalation_triggered:
+type: boolean
+example: true
+message:
+type: string
+example: "Feedback logged and alert dispatched."
+AlertObject:
+type: object
+required:
+id
+feedback_id
+department_id
+severity
+issue_summary
+status
+created_at
+properties:
+id:
+type: string
+feedback_id:
+type: string
+department_id:
+type: string
+severity:
+type: string
+enum: [LOW, MEDIUM, HIGH, CRITICAL]
+issue_summary:
+type: string
+status:
+type: string
+enum: [OPEN, RESOLVED]
+created_at:
+type: string
+format: date-time
+MetricsSummary:
+type: object
+required:
+overall_csat
+total_responses
+open_alerts_count
+department_breakdown
+properties:
+overall_csat:
+type: number
+format: float
+example: 3.8
+total_responses:
+type: integer
+example: 42
+open_alerts_count:
+type: integer
+example: 3
+department_breakdown:
+type: object
+additionalProperties:
+type: object
+properties:
+csat:
+type: number
+count:
+type: integer
+---
+2. Behavioral Contract Specifications (BDD Gherkin Features)
+These feature specifications define the executable behavioral rules for system implementation.
+Feature 1: Nurse-Assisted Feedback Ingestion & Automated Escalation
+`features/nurse_feedback_escalation.feature`
+Feature: Nurse-Assisted Feedback Ingestion & Automatic Escalation
+As a Ward Nurse using the SmartClinic EHR Modal
+I want to submit patient rating and feedback
+So that low ratings automatically alert department supervisors
+Background:
+Given the SQLite database is initialized with standard departments
+Scenario: Submitting a positive rating (No Escalation)
+When the nurse submits feedback with the following details:
+visit_id | department_id | overall_rating | category_tags | raw_comment
+VIS-2026-01 | OPD | 5 | STAFF_COURTESY | Great doctor attention
+Then the API response status should be 200
+And the feedback record should be stored in "patient_feedback"
+And no alert should be generated in "hospital_alerts"
+Scenario: Submitting a low rating (Triggers Automated Alert)
+When the nurse submits feedback with the following details:
+visit_id | department_id | overall_rating | category_tags | raw_comment
+VIS-2026-02 | EMERGENCY | 1 | LONG_WAIT | Patient waited 4 hours.
+Then the API response status should be 200
+And "escalation_triggered" in the response should be true
+And a record should be created in "hospital_alerts" with:
+department_id | severity | status
+EMERGENCY | HIGH | OPEN
+---
+Feature 2: WhatsApp Text Feedback & Medical Advice Guardrail
+`features/whatsapp_guardrail.feature`
+Feature: WhatsApp Text Processing & Medical Advice Guardrail
+As a WhatsApp Patient Bot Router
+I want to filter out medical diagnosis/dosage questions
+So that clinical queries receive a refusal notice instead of being logged as feedback
+Scenario: Processing operational feedback via WhatsApp text
+Given the patient sends WhatsApp text "+2348011112222": "Pharmacy was out of antibiotics."
+When the system processes the message via Groq LLM
+Then the phone number should be hashed using SHA-256
+And "guardrail_triggered" should be false
+And the feedback entry should contain tag "DRUG_AVAILABILITY"
+Scenario: Blocking medical advice queries
+Given the patient sends WhatsApp text "+2348011112222": "What dosage of Amoxicillin should I give my child?"
+When the system processes the message via Groq LLM
+Then "guardrail_triggered" should be true
+And the feedback record should NOT be written to "patient_feedback"
+And the system response message should instruct the patient to contact a doctor immediately
+---
+3. Data Contract Validation Rules (Pydantic Verification)
+The software components MUST enforce structural validation rules at system boundaries using Pydantic schemas.
+specs/contracts.py
+import re
+from pydantic import BaseModel, Field, field_validator
+from typing import List, Optional
+class StrictNurseFeedbackContract(BaseModel):
+visit_id: str = Field(..., min_length=3, max_length=50)
+department_id: str
+overall_rating: int = Field(..., ge=1, le=5)
+category_tags: List[str] = Field(default_factory=list)
+raw_comment: Optional[str] = Field(None, max_length=1000)
+is_anonymous: bool = False
+@field_validator("department_id")
+@classmethod
+def validate_department(cls, value: str) -> str:
+allowed = {"OPD", "EMERGENCY", "PHARMACY", "BILLING", "WARDS"}
+if value.upper() not in allowed:
+raise ValueError(f"Invalid department. Must be one of {allowed}")
+return value.upper()
+class StrictWhatsAppContract(BaseModel):
+phone_number: str
+message_text: str = Field(..., min_length=3, max_length=2000)
+@field_validator("phone_number")
+@classmethod
+def validate_e164_phone(cls, value: str) -> str:
+pattern = r"^\+[1-9]\d{1,14}$"
+if not re.match(pattern, value):
+raise ValueError("Phone number must adhere to strict E.164 format (e.g., +2348012345678)")
+return value
+---
+4. Spec Compliance & Contract Testing Strategy
+To ensure code adherence to the OpenAPI contract and BDD specs:
+┌──────────────────────────┐      ┌──────────────────────────┐
+│  OpenAPI 3.1 Spec File   │      │  Gherkin Feature Files   │
+└────────────┬─────────────┘      └────────────┬─────────────┘
+│                                 │
+▼                                 ▼
+┌──────────────────────────┐      ┌──────────────────────────┐
+│  Schemathesis API Test   │      │  pytest-bdd Execution    │
+│  (Fuzzing Contract Test) │      │  (Behavior Verification) │
+└────────────┬─────────────┘      └────────────┬─────────────┘
+│                                 │
+└─────────────────┬───────────────┘
+│
+▼
+┌────────────────────────────────────┐
+│  FastAPI Gateway Implementation    │
+└────────────────────────────────────┘
+1. **Schema Fuzzing via Schemathesis:** Execute CLI contract fuzzing directly against the OpenAPI specification:
+schemathesis run http://127.0.0.1:8000/openapi.json --checks all
+2. **Behavior Verification via pytest-bdd:** Execute feature files against the local implementation:
+pytest tests/step_defs/test_bdd_rules.py

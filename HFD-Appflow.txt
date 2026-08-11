@@ -1,0 +1,158 @@
+Appflow Specification: Lightweight Demo Edition
+Project Name: Omnichannel Hospital Feedback & Care Quality Platform (Demo / PoC Edition)
+Target Environment: Local Host PC (FastAPI + Groq API + SQLite + React Vite Single-Page Application)
+Document Version: 1.0
+---
+1. End-to-End Lightweight Architecture Flow
+In the lightweight demo edition, all three channels (Nurse Modal, WhatsApp Simulator, and Executive Dashboard) are consolidated into a single React SPA running on `http://localhost:5173`. Requests route through the local FastAPI backend on `http://localhost:8000`, using Groq Cloud API for AI processing and SQLite (`hospital_demo.db`) for local persistence.
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                           SINGLE REACT SPA (Port 5173)                           │
+│                                                                                  │
+│   [ TAB 1: Nurse Modal ]    [ TAB 2: WhatsApp Simulator ]    [ TAB 3: Dashboard ]  │
+└─────────────┬─────────────────────────────┬──────────────────────────────┬───────┘
+│                             │                              │
+│ REST POST                   │ REST POST                    │ REST GET / PATCH
+│ (/nurse)                    │ (/whatsapp/text or /audio)   │ (/metrics, /alerts)
+▼                             ▼                              ▼
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                           FASTAPI GATEWAY (Port 8000)                            │
+│                                                                                  │
+│  1. PII Redactor (SHA-256 Phone Hasher)                                          │
+│  2. AI Orchestrator (Calls Groq Cloud API)                                       │
+│     ├── Text Parsing: `llama-3.3-70b-versatile`                                  │
+│     └── Audio Transcription: `whisper-large-v3`                                  │
+│  3. Escalation Rules Engine (Checks rating <= 2 or critical flags)               │
+└─────────────────────────────────────┬────────────────────────────────────────────┘
+│
+▼
+┌─────────────────────────────────┐
+│    SQLite DB (hospital_demo.db) │
+│ - patient_feedback              │
+│ - hospital_alerts               │
+└─────────────────────────────────┘
+---
+2. Channel A: SmartClinic Nurse-Assisted User Flow
+This flow simulates a nurse logging a 30-second patient feedback entry during discharge or ward rounds.
+[ Nurse opens Tab 1: "Nurse-Assisted Entry" ]
+│
+▼
+[ Form renders with pre-filled demo context ]
+Visit ID: `VIS-2026-104` (Auto-generated)
+Department: Select dropdown (`PHARMACY`, `OPD`, `EMERGENCY`, etc.)
+│
+▼
+[ Nurse asks patient for rating and taps 1-5 color-coded card ]
+1-2 = Rose | 3 = Amber | 4-5 = Emerald
+│
+▼
+[ Nurse taps multi-select Category Chips ]
+e.g., `LONG_WAIT`, `STAFF_COURTESY`, `DRUG_AVAILABILITY`
+│
+▼
+[ Nurse clicks "Submit Feedback" ]
+│
+▼
+{ POST /api/v1/feedback/nurse }
+│
+▼
+[ FastAPI validates payload via Pydantic schema ]
+│
+▼
+[ Writes record directly to SQLite `patient_feedback` table ]
+│
+▼
+[ Evaluates Escalation Rule: Is rating <= 2? ]
+├── If TRUE: Automatically inserts record into SQLite `hospital_alerts` table
+└── If FALSE: Proceeds to completion
+│
+▼
+[ Backend returns JSON response: `{"status": "success", "escalation_triggered": true}` ]
+│
+▼
+[ UI displays green success toast & resets form state for next entry ]
+---
+3. Channel B: WhatsApp Simulator User Flow (Text & Audio)
+This flow simulates a patient submitting feedback via WhatsApp text or voice note.
+[ User opens Tab 2: "WhatsApp Simulator" ]
+│
+├── Option A: Type Text Message
+└── Option B: Record / Upload Voice Note
+│
+▼
+[ User clicks "Send Message" ]
+│
+▼
+{ POST /api/v1/feedback/whatsapp/text OR /audio }
+│
+▼
+[ Backend hashes patient phone number using HMAC-SHA256 ]
+│
+▼
+[ Audio Path Only ]:
+Backend forwards binary audio payload to Groq Whisper API (`whisper-large-v3`)
+Receives plaintext transcript string in response
+│
+▼
+[ FastAPI passes message/transcript to Groq LLM (`llama-3.3-70b-versatile`) ]
+│
+▼
+[ Groq LLM evaluates message against System Prompt Rules ]:
+│
+├── Case 1: `is_medical_query == true`
+│     └── Returns guardrail refusal: "I am an automated assistant. Please consult a doctor."
+│     └── Halts flow (Does NOT save to feedback database).
+│
+└── Case 2: Valid Feedback
+└── Extracts: `department_id`, `overall_rating` (1-5), `sentiment_score`, `category_tags`
+│
+▼
+[ Writes extracted metadata to SQLite `patient_feedback` table ]
+│
+▼
+[ Evaluates Escalation Rule: Is rating <= 2 OR `is_critical_issue == true`? ]
+├── If TRUE: Inserts new record into SQLite `hospital_alerts`
+└── If FALSE: No alert created
+│
+▼
+[ Returns JSON response and renders simulated chat bubble in UI ]
+---
+4. Channel C: Executive Dashboard & Alert Lifecycle Flow
+This flow shows how hospital administrators view real-time metrics and triage escalated alerts.
+[ Admin opens Tab 3: "Executive Dashboard" ]
+│
+▼
+{ GET /api/v1/dashboard/metrics AND GET /api/v1/dashboard/alerts?status=OPEN }
+│
+▼
+[ FastAPI queries SQLite database ]:
+Calculates overall CSAT average, total response count, and open alert counts
+Computes department-by-department score breakdown
+Fetches all unresolved rows from `hospital_alerts`
+│
+▼
+[ React UI renders dashboard layout ]:
+Top KPI Cards: CSAT Score, Total Responses, Active Alerts
+Department Heatmap Grid: Color-coded status tags (Green / Amber / Red)
+Active Alert Queue: List of open critical issues with severity badges
+│
+▼
+[ Admin clicks "Mark Resolved" on an open alert ]
+│
+▼
+{ PATCH /api/v1/alerts/{alert_id} with `{"status": "RESOLVED"}` }
+│
+▼
+[ FastAPI updates alert row in SQLite ]
+│
+▼
+[ UI updates alert badge from `OPEN` (Red) to `RESOLVED` (Green) and decrements alert count ]
+---
+5. System State Transition Matrix
+--- | --- | --- | --- | ---
+**Nurse Modal** | `IDLE` | Form Submit Click | `SUBMITTING` | Disables buttons to prevent double submission.
+**Nurse Modal** | `SUBMITTING` | API Success (200 OK) | `SUCCESS` | Form clears, success banner appears, metrics auto-refresh.
+**WhatsApp Chat** | `IDLE` | Send Audio / Text | `PROCESSING_AI` | Shows typing/processing indicator in chat window.
+**WhatsApp Chat** | `PROCESSING_AI` | Guardrail Triggered | `REJECTED` | Displays friendly clinical refusal message; no DB entry.
+**WhatsApp Chat** | `PROCESSING_AI` | AI Extraction Complete | `LOGGED` | Chat bubble renders confirmation message; DB record saved.
+**Hospital Alert** | *None* | Feedback Rating ≤ 2 | `OPEN` | Inserted into `hospital_alerts`; increases dashboard alert count.
+**Hospital Alert** | `OPEN` | Admin Clicks Resolve | `RESOLVED` | Status updated in SQLite; row badge turns green.

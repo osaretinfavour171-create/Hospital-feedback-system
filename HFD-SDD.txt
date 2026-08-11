@@ -1,0 +1,230 @@
+Software Design Document (SDD): Lightweight Demo Architecture
+Project Name: Omnichannel Hospital Feedback & Care Quality Platform (Demo / PoC Edition)
+Document Version: 1.0
+Target Environment: Local PC (FastAPI + Groq Cloud API + SQLite + React Vite)
+Execution Objective: Zero-cost, local host capability with <500 MB memory footprint.
+---
+1. System Architecture & File Structure
+The demo architecture consists of a single FastAPI service acting as the backend API Gateway and AI Orchestrator, an embedded SQLite database file (`hospital_demo.db`), and a single-page React frontend serving all three user views via an interactive tab switcher.
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                                FRONTEND (React + Vite)                           │
+│  ┌────────────────────────┐ ┌────────────────────────┐ ┌──────────────────────┐  │
+│  │  Nurse Assisted Modal  │ │  WhatsApp Simulator    │ │ Executive Dashboard  │  │
+│  └───────────┬────────────┘ └───────────┬────────────┘ └──────────┬───────────┘  │
+└──────────────┼──────────────────────────┼─────────────────────────┼──────────────┘
+│                          │                         │
+│ REST API                 │ REST / Multipart        │ REST API
+▼                          ▼                         ▼
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                                BACKEND (FastAPI Core)                            │
+│                                                                                  │
+│  ┌────────────────────────┐ ┌────────────────────────┐ ┌──────────────────────┐  │
+│  │ Gateway / Router       │ │ PII Redactor           │ │ Guardrail Engine     │  │
+│  │ (Endpoints)            │ │ (SHA-256 Hasher)       │ │ (Clinical Blocker)   │  │
+│  └───────────┬────────────┘ └───────────┬────────────┘ └──────────┬───────────┘  │
+│              │                          │                         │              │
+│              └──────────────────────────┼─────────────────────────┘              │
+│                                         │                                        │
+│                                         ▼                                        │
+│                        ┌─────────────────────────────────┐                       │
+│                        │ AI Engine (Groq Python SDK)     │                       │
+│                        │ - whisper-large-v3 (Audio)     │                       │
+│                        │ - llama-3.3-70b-versatile (LLM) │                       │
+│                        └────────────────┬────────────────┘                       │
+└─────────────────────────────────────────┼────────────────────────────────────────┘
+│
+▼
+┌─────────────────────────────────┐
+│ Storage (SQLite: hospital.db)   │
+└─────────────────────────────────┘
+1.1 Source Code Directory Tree
+hospital-feedback-demo/
+├── backend/
+│   ├── main.py                  # FastAPI application entrypoint & routes
+│   ├── database.py              # SQLite connection & schema initialization
+│   ├── ai_engine.py             # Groq SDK wrapper (LLM extraction & Whisper)
+│   ├── schemas.py               # Pydantic models for request/response validation
+│   ├── requirements.txt         # Python dependencies
+│   └── .env                     # GROQ_API_KEY and configuration
+└── frontend/
+├── src/
+│   ├── App.jsx              # Main tab router (Nurse, WhatsApp, Dashboard)
+│   ├── components/
+│   │   ├── NurseModal.jsx   # SmartClinic assisted-entry component
+│   │   ├── WaSimulator.jsx  # WhatsApp text/audio submission simulator
+│   │   └── Dashboard.jsx    # Real-time metrics heatmap & alert manager
+│   ├── index.css            # Tailwind CSS styling & custom tokens
+│   └── main.jsx             # React entrypoint
+├── package.json
+└── vite.config.js
+---
+2. Data Models & Database Schema
+The database relies on SQLite (`sqlite3` standard library or `aiosqlite`), requiring zero database administration or external daemons.
+-- Database Initialization Script (database.py)
+CREATE TABLE IF NOT EXISTS departments (
+id TEXT PRIMARY KEY,
+name TEXT NOT NULL
+);
+INSERT OR IGNORE INTO departments (id, name) VALUES
+('OPD', 'Outpatient Department'),
+('EMERGENCY', 'Accident & Emergency'),
+('PHARMACY', 'Main Pharmacy'),
+('BILLING', 'Accounts & Revenue'),
+('WARDS', 'Inpatient Wards');
+CREATE TABLE IF NOT EXISTS patient_feedback (
+id TEXT PRIMARY KEY,
+visit_id TEXT NOT NULL,
+department_id TEXT NOT NULL,
+channel TEXT NOT NULL,                  -- 'NURSE_ASSISTED' or 'WHATSAPP_BOT'
+patient_phone_hash TEXT,
+overall_rating INTEGER NOT NULL,        -- 1 to 5
+sentiment_score REAL,                  -- -1.00 to +1.00
+category_tags TEXT,                    -- JSON array formatted string
+raw_comment TEXT,
+summary TEXT,
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+FOREIGN KEY(department_id) REFERENCES departments(id)
+);
+CREATE TABLE IF NOT EXISTS hospital_alerts (
+id TEXT PRIMARY KEY,
+feedback_id TEXT NOT NULL,
+department_id TEXT NOT NULL,
+severity TEXT NOT NULL,                 -- 'MEDIUM', 'HIGH', 'CRITICAL'
+issue_summary TEXT NOT NULL,
+status TEXT DEFAULT 'OPEN',             -- 'OPEN', 'RESOLVED'
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+FOREIGN KEY(feedback_id) REFERENCES patient_feedback(id)
+);
+---
+3. Pydantic Schemas & Data Contracts
+Located in `backend/schemas.py`, ensuring strict structural integrity across the pipeline.
+from pydantic import BaseModel, Field
+from typing import List, Optional
+from datetime import datetime
+Inbound Nurse Form Submission
+class NurseFeedbackRequest(BaseModel):
+visit_id: str = Field(..., example="VIS-2026-8819")
+department_id: str = Field(..., example="PHARMACY")
+overall_rating: int = Field(..., ge=1, le=5)
+category_tags: List[str] = Field(default_factory=list)
+raw_comment: Optional[str] = None
+is_anonymous: bool = False
+Inbound WhatsApp Text Simulation
+class WhatsAppTextRequest(BaseModel):
+phone_number: str = Field(..., example="+2348012345678")
+message_text: str = Field(..., example="The emergency room wait time was 3 hours and dirty.")
+AI Engine Output Target Schema (Structured JSON Mode)
+class AIExtractionOutput(BaseModel):
+is_medical_query: bool = Field(..., description="True if patient asks for diagnosis, dosage, or medical advice")
+department_id: str = Field(..., description="One of: OPD, EMERGENCY, PHARMACY, BILLING, WARDS")
+overall_rating: int = Field(..., ge=1, le=5)
+sentiment_score: float = Field(..., ge=-1.0, le=1.0)
+category_tags: List[str]
+summary: str
+is_critical_issue: bool
+Dashboard Response Models
+class AlertResponse(BaseModel):
+id: str
+feedback_id: str
+department_id: str
+severity: str
+issue_summary: str
+status: str
+created_at: str
+class MetricsSummary(BaseModel):
+overall_csat: float
+total_responses: int
+open_alerts_count: int
+nps_proxy_percentage: float
+---
+4. API Endpoints & Route Design
+4.1 Route Matrix
+--- | --- | --- | ---
+`POST` | `/api/v1/feedback/nurse` | Logs feedback submitted via SmartClinic Modal | `NurseFeedbackRequest`
+`POST` | `/api/v1/feedback/whatsapp/text` | Processes text feedback via Groq LLM | `WhatsAppTextRequest`
+`POST` | `/api/v1/feedback/whatsapp/audio` | Transcribes audio via Whisper API and parses feedback | `multipart/form-data` (file)
+`GET` | `/api/v1/dashboard/metrics` | Returns aggregated CSAT, response counts, and department averages | None
+`GET` | `/api/v1/dashboard/alerts` | Fetches active or past hospital alerts | `?status=OPEN`
+`PATCH` | `/api/v1/alerts/{alert_id}` | Updates alert status (`OPEN` → `RESOLVED`) | `{"status": "RESOLVED"}`
+---
+5. AI Engine Logic & Prompt Engineering
+Located in `backend/ai_engine.py`. Uses `groq.Groq` with `llama-3.3-70b-versatile` enforcing JSON Output.
+5.1 System Prompt Design
+SYSTEM_PROMPT = """
+You are an expert AI clinical feedback analyst for FMC Hospital.
+Your task is to analyze patient feedback comments and extract structured operational metadata.
+STRICT RULES:
+1. MEDICAL GUARDRAIL: If the user is asking for medical advice, prescription guidelines, dosage instructions, or diagnosis, set "is_medical_query": true.
+2. DEPARTMENT MAPPING: Map the comment to exactly ONE valid department ID: ["OPD", "EMERGENCY", "PHARMACY", "BILLING", "WARDS"]. If unclear, default to "OPD".
+3. RATING EXTRACTION: Extract an overall rating from 1 (terrible) to 5 (excellent). If not explicitly stated, infer based on tone.
+4. SENTIMENT SCORE: Return a floating number between -1.00 (extremely negative) and +1.00 (extremely positive).
+5. CATEGORY TAGS: Choose relevant tags from: ["LONG_WAIT", "STAFF_COURTESY", "CLEANLINESS", "DRUG_AVAILABILITY", "BILLING_DELAY", "QUALITY_OF_CARE"].
+6. CRITICAL ISSUE: Set "is_critical_issue": true ONLY if there is an explicit mention of staff abuse, severe medical negligence, or extreme physical hazard.
+OUTPUT FORMAT: You MUST return a valid JSON object matching the requested schema.
+"""
+5.2 Groq Integration Snippet
+import os
+import json
+import hashlib
+from groq import Groq
+from schemas import AIExtractionOutput
+groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+def hash_phone(phone_number: str) -> str:
+"""Hashes phone numbers with SHA-256 for PII protection."""
+salt = os.getenv("SALT_SECRET", "demo_salt_123")
+return hashlib.sha256((phone_number + salt).encode()).hexdigest()
+def process_patient_text(raw_text: str) -> AIExtractionOutput:
+"""Invokes Groq API with JSON mode for deterministic response parsing."""
+response = groq_client.chat.completions.create(
+model="llama-3.3-70b-versatile",
+messages=[
+{"role": "system", "content": SYSTEM_PROMPT},
+{"role": "user", "content": raw_text}
+],
+response_format={"type": "json_object"},
+temperature=0.1
+)
+data = json.loads(response.choices[0].message.content)
+return AIExtractionOutput(data)
+def transcribe_audio(file_bytes: bytes, filename: str) -> str:
+"""Transcribes patient audio via Groq Whisper API."""
+transcription = groq_client.audio.transcriptions.create(
+file=(filename, file_bytes),
+model="whisper-large-v3",
+response_format="text"
+)
+return transcription
+---
+6. Frontend Component Architecture & UI Flow
+The React frontend uses a tab bar navigation pattern to easily switch perspectives during demonstration.
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                             REACT MAIN APPLICATION                               │
+│  Navigation Tabs: [ 1. Nurse Modal ]  [ 2. WhatsApp Simulator ]  [ 3. Dashboard ]│
+└────────────────────────────────────────┬─────────────────────────────────────────┘
+│
+┌────────────────────────────────┼────────────────────────────────┐
+▼                                ▼                                ▼
+┌───────────────────────┐    ┌───────────────────────┐    ┌───────────────────────┐
+│ NurseModal.jsx        │    │ WaSimulator.jsx       │    │ Dashboard.jsx         │
+│ - Rating Stars (1-5)  │    │ - Chat Window View    │    │ - KPI Summary Cards   │
+│ - Tap Category Chips  │    │ - Audio Recorder      │    │ - Dept Heatmap Grid   │
+│ - Quick Submit Button │    │ - AI Processing Log   │    │ - Alert Queue List    │
+└───────────────────────┘    └───────────────────────┘    └───────────────────────┘
+6.1 Key Interface Specifications
+**Primary Theme Color:** `#0D9488` (Healing Teal)
+**Background Canvas:** `#FDFBF7` (Warm Sand)
+**Alert Status Badges:**
+`OPEN`: Red pill (`#FFE4E6` background, `#E11D48` text)
+`RESOLVED`: Green pill (`#D1FAE5` background, `#10B981` text)
+---
+7. Execution & Verification Checklist
+To verify that the lightweight system runs properly:
+1. **Environment Setup:**
+Install Python dependencies: `pip install fastapi uvicorn groq python-dotenv pydantic`
+Set API Key in `.env`: `GROQ_API_KEY=gsk_...`
+2. **Backend Execution:**
+Command: `python -m uvicorn main:app --reload --port 8000`
+Test URL: http://127.0.0.1:8000/docs (FastAPI Swagger UI auto-generated)
+3. **Frontend Execution:**
+Command: `cd frontend && npm install && npm run dev`
+Access URL: http://localhost:5173

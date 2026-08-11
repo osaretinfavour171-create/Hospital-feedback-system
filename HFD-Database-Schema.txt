@@ -1,0 +1,255 @@
+Database Schema Specification: Lightweight Demo Edition
+Project Name: Omnichannel Hospital Feedback & Care Quality Platform (Demo Edition)
+Database Engine: SQLite 3 (`hospital_demo.db`)
+Document Version: 1.0
+Storage Architecture: Zero-maintenance single-file storage with foreign key constraints, default triggers, and optimized indexes.
+---
+1. Entity-Relationship Diagram (ERD)
+┌──────────────────────────┐
+│       departments        │
+├──────────────────────────┤
+│ PK  id (TEXT)            │
+│     name (TEXT)          │
+└─────────────┬────────────┘
+│ 1
+│
+│ N
+┌─────────────┴────────────┐            1 ┌──────────────────────────┐
+│     patient_feedback     ├──────────────┼───── hospital_alerts     │
+├──────────────────────────┤ 1          N ├──────────────────────────┤
+│ PK  id (TEXT)            │              │ PK  id (TEXT)            │
+│ FK  department_id (TEXT) ├────────┐     │ FK  feedback_id (TEXT)   │
+│     visit_id (TEXT)      │        │     │ FK  department_id (TEXT) │
+│     channel (TEXT)       │        │     │     severity (TEXT)      │
+│     patient_phone_hash   │        └────►│     issue_summary (TEXT) │
+│     overall_rating (INT) │              │     status (TEXT)        │
+│     sentiment_score (REAL│              │     created_at (TIMESTAMP│
+│     category_tags (JSON) │              └──────────────────────────┘
+│     raw_comment (TEXT)   │
+│     summary (TEXT)       │
+│     is_anonymous (INT)   │
+│     created_at (TIMESTAMP│
+└──────────────────────────┘
+---
+2. Complete SQL DDL Scripts (`schema.sql`)
+-- Enable foreign key enforcement for SQLite
+PRAGMA foreign_keys = ON;
+-- ============================================================================
+-- 1. DEPARTMENTS TABLE (Lookup table for hospital wards & service areas)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS departments (
+id TEXT PRIMARY KEY CHECK (length(id) <= 20),
+name TEXT NOT NULL,
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+-- Seed initial default departments
+INSERT OR IGNORE INTO departments (id, name) VALUES
+('OPD', 'Outpatient Department'),
+('EMERGENCY', 'Accident & Emergency'),
+('PHARMACY', 'Main Pharmacy'),
+('BILLING', 'Accounts & Revenue'),
+('WARDS', 'Inpatient Wards');
+-- ============================================================================
+-- 2. PATIENT_FEEDBACK TABLE (Core table storing raw & AI-classified reviews)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS patient_feedback (
+id TEXT PRIMARY KEY,                       -- UUID v4 string (e.g. 'fb-uuid-9921')
+visit_id TEXT NOT NULL,                    -- Patient visit identifier (e.g. 'VIS-2026-104')
+department_id TEXT NOT NULL,               -- Foreign key to departments(id)
+channel TEXT NOT NULL CHECK (
+channel IN ('NURSE_ASSISTED', 'WHATSAPP_BOT')
+),
+patient_phone_hash TEXT,                   -- SHA-256 hashed phone number for PII masking
+overall_rating INTEGER NOT NULL CHECK (
+overall_rating >= 1 AND overall_rating <= 5
+),
+sentiment_score REAL DEFAULT 0.0 CHECK (
+sentiment_score >= -1.0 AND sentiment_score <= 1.0
+),
+category_tags TEXT DEFAULT '[]',           -- Stored as JSON string array
+raw_comment TEXT,                          -- Plaintext feedback narrative or audio transcript
+summary TEXT,                              -- LLM generated concise issue summary
+is_anonymous INTEGER DEFAULT 0 CHECK (     -- Boolean integer (0 = False, 1 = True)
+is_anonymous IN (0, 1)
+),
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+FOREIGN KEY (department_id) REFERENCES departments(id) ON DELETE RESTRICT
+);
+-- Indexes for rapid dashboard queries & filtering
+CREATE INDEX IF NOT EXISTS idx_feedback_department ON patient_feedback(department_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_rating ON patient_feedback(overall_rating);
+CREATE INDEX IF NOT EXISTS idx_feedback_created_at ON patient_feedback(created_at);
+-- ============================================================================
+-- 3. HOSPITAL_ALERTS TABLE (Real-time escalation queue for low ratings)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS hospital_alerts (
+id TEXT PRIMARY KEY,                       -- UUID v4 string (e.g. 'alt-uuid-4412')
+feedback_id TEXT NOT NULL,                 -- Foreign key to patient_feedback(id)
+department_id TEXT NOT NULL,               -- Foreign key to departments(id)
+severity TEXT NOT NULL CHECK (
+severity IN ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL')
+),
+issue_summary TEXT NOT NULL,               -- Brief explanation of the safety or delay issue
+status TEXT DEFAULT 'OPEN' CHECK (
+status IN ('OPEN', 'RESOLVED')
+),
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+FOREIGN KEY (feedback_id) REFERENCES patient_feedback(id) ON DELETE CASCADE,
+FOREIGN KEY (department_id) REFERENCES departments(id) ON DELETE RESTRICT
+);
+-- Indexes for alert monitoring & escalation management
+CREATE INDEX IF NOT EXISTS idx_alerts_status ON hospital_alerts(status);
+CREATE INDEX IF NOT EXISTS idx_alerts_department ON hospital_alerts(department_id);
+---
+3. Data Dictionary
+Table 3.1: `departments`
+Stores static reference data for hospital departments.
+--- | --- | --- | --- | ---
+`id` | `TEXT` | `PRIMARY KEY` | Short unique code for the department | `'PHARMACY'`
+`name` | `TEXT` | `NOT NULL` | Human-readable department name | `'Main Pharmacy'`
+`created_at` | `TIMESTAMP` | `DEFAULT CURRENT_TIMESTAMP` | Record insertion timestamp | `'2026-08-08 14:00:00'`
+---
+Table 3.2: `patient_feedback`
+Stores all incoming feedback collected via the Nurse Modal or WhatsApp Simulator.
+--- | --- | --- | --- | ---
+`id` | `TEXT` | `PRIMARY KEY` | Unique feedback record identifier (UUID) | `'fb-881a-2026'`
+`visit_id` | `TEXT` | `NOT NULL` | Patient admission or consultation ID | `'VIS-2026-8891'`
+`department_id` | `TEXT` | `FK -> departments.id` | Department where care was delivered | `'EMERGENCY'`
+`channel` | `TEXT` | `CHECK (NURSE_ASSISTED, WHATSAPP_BOT)` | Ingestion channel origin | `'WHATSAPP_BOT'`
+`patient_phone_hash` | `TEXT` | `Nullable` | SHA-256 HMAC hash of phone number | `'e3b0c44298fc1c149afbf4c8...'`
+`overall_rating` | `INTEGER` | `CHECK (1 TO 5)` | Numerical patient satisfaction score | `1`
+`sentiment_score` | `REAL` | `CHECK (-1.0 TO 1.0)` | AI-computed sentiment score | `-0.85`
+`category_tags` | `TEXT` | `JSON Format` | Array of tagged issues/compliments | `'["LONG_WAIT","DIRTY"]'`
+`raw_comment` | `TEXT` | `Nullable` | Original patient text or audio transcription | `'Waited 3 hours in ER.'`
+`summary` | `TEXT` | `Nullable` | AI-generated single-sentence summary | `'3-hour delay in ER area.'`
+`is_anonymous` | `INTEGER` | `CHECK (0 OR 1)` | Flag indicating anonymous logging | `0`
+`created_at` | `TIMESTAMP` | `DEFAULT CURRENT_TIMESTAMP` | Record creation timestamp | `'2026-08-08 14:05:12'`
+---
+Table 3.3: `hospital_alerts`
+Stores active and resolved escalations triggered by low ratings (≤ 2) or critical safety concerns.
+--- | --- | --- | --- | ---
+`id` | `TEXT` | `PRIMARY KEY` | Unique alert identifier (UUID) | `'alt-771c-3091'`
+`feedback_id` | `TEXT` | `FK -> patient_feedback.id` | Source feedback record causing alert | `'fb-881a-2026'`
+`department_id` | `TEXT` | `FK -> departments.id` | Flagged department requiring triage | `'EMERGENCY'`
+`severity` | `TEXT` | `CHECK (LOW, MEDIUM, HIGH, CRITICAL)` | Calculated alert urgency level | `'HIGH'`
+`issue_summary` | `TEXT` | `NOT NULL` | Summary of the actionable issue | `'Patient reported 3h ER wait'`
+`status` | `TEXT` | `CHECK (OPEN, RESOLVED)` | Workflow resolution state | `'OPEN'`
+`created_at` | `TIMESTAMP` | `DEFAULT CURRENT_TIMESTAMP` | Alert creation timestamp | `'2026-08-08 14:05:13'`
+---
+4. Analytical Views & Helper Queries
+View 4.1: Executive Dashboard Metrics View (`v_dashboard_metrics`)
+CREATE VIEW IF NOT EXISTS v_dashboard_metrics AS
+SELECT
+d.id AS department_id,
+d.name AS department_name,
+COUNT(f.id) AS total_feedback_count,
+ROUND(AVG(f.overall_rating), 2) AS average_csat,
+ROUND(AVG(f.sentiment_score), 2) AS average_sentiment,
+SUM(CASE WHEN f.overall_rating <= 2 THEN 1 ELSE 0 END) AS negative_reviews_count,
+SUM(CASE WHEN a.status = 'OPEN' THEN 1 ELSE 0 END) AS active_alerts_count
+FROM departments d
+LEFT JOIN patient_feedback f ON d.id = f.department_id
+LEFT JOIN hospital_alerts a ON f.id = a.feedback_id
+GROUP BY d.id, d.name;
+---
+5. Python Integration Module (`database.py`)
+This file manages database connection pooling, table initialization, and transaction execution using Python's native `sqlite3` module.
+import sqlite3
+import json
+import os
+import uuid
+from typing import Dict, Any, List, Optional
+DB_FILE = os.getenv("SQLITE_DB_PATH", "hospital_demo.db")
+def get_db_connection():
+"""Establishes a connection to SQLite database with Row factory enabled."""
+conn = sqlite3.connect(DB_FILE)
+conn.row_factory = sqlite3.Row
+conn.execute("PRAGMA foreign_keys = ON;")
+return conn
+def init_db():
+"""Initializes schema and seeds default lookup data."""
+conn = get_db_connection()
+cursor = conn.cursor()
+Execute schema setup
+cursor.executescript("""
+PRAGMA foreign_keys = ON;
+CREATE TABLE IF NOT EXISTS departments (
+id TEXT PRIMARY KEY,
+name TEXT NOT NULL,
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+INSERT OR IGNORE INTO departments (id, name) VALUES
+('OPD', 'Outpatient Department'),
+('EMERGENCY', 'Accident & Emergency'),
+('PHARMACY', 'Main Pharmacy'),
+('BILLING', 'Accounts & Revenue'),
+('WARDS', 'Inpatient Wards');
+CREATE TABLE IF NOT EXISTS patient_feedback (
+id TEXT PRIMARY KEY,
+visit_id TEXT NOT NULL,
+department_id TEXT NOT NULL,
+channel TEXT NOT NULL CHECK (channel IN ('NURSE_ASSISTED', 'WHATSAPP_BOT')),
+patient_phone_hash TEXT,
+overall_rating INTEGER NOT NULL CHECK (overall_rating >= 1 AND overall_rating <= 5),
+sentiment_score REAL DEFAULT 0.0,
+category_tags TEXT DEFAULT '[]',
+raw_comment TEXT,
+summary TEXT,
+is_anonymous INTEGER DEFAULT 0,
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+FOREIGN KEY (department_id) REFERENCES departments(id)
+);
+CREATE TABLE IF NOT EXISTS hospital_alerts (
+id TEXT PRIMARY KEY,
+feedback_id TEXT NOT NULL,
+department_id TEXT NOT NULL,
+severity TEXT NOT NULL CHECK (severity IN ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL')),
+issue_summary TEXT NOT NULL,
+status TEXT DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'RESOLVED')),
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+FOREIGN KEY (feedback_id) REFERENCES patient_feedback(id) ON DELETE CASCADE,
+FOREIGN KEY (department_id) REFERENCES departments(id)
+);
+""")
+conn.commit()
+conn.close()
+def insert_feedback(data: Dict[str, Any]) -> str:
+"""Inserts a feedback record and automatically handles alert generation if rating <= 2."""
+conn = get_db_connection()
+cursor = conn.cursor()
+feedback_id = f"fb-{uuid.uuid4().hex[:8]}"
+category_tags_json = json.dumps(data.get("category_tags", []))
+cursor.execute("""
+INSERT INTO patient_feedback (
+id, visit_id, department_id, channel, patient_phone_hash,
+overall_rating, sentiment_score, category_tags, raw_comment,
+summary, is_anonymous
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+""", (
+feedback_id,
+data["visit_id"],
+data["department_id"],
+data["channel"],
+data.get("patient_phone_hash"),
+data["overall_rating"],
+data.get("sentiment_score", 0.0),
+category_tags_json,
+data.get("raw_comment"),
+data.get("summary", ""),
+1 if data.get("is_anonymous") else 0
+))
+Escalation Rule: Trigger alert if rating <= 2 or critical flag present
+if data["overall_rating"] <= 2 or data.get("is_critical_issue"):
+alert_id = f"alt-{uuid.uuid4().hex[:8]}"
+severity = "CRITICAL" if data.get("is_critical_issue") else "HIGH"
+summary = data.get("summary") or f"Low rating ({data['overall_rating']}/5) reported in {data['department_id']}"
+cursor.execute("""
+INSERT INTO hospital_alerts (id, feedback_id, department_id, severity, issue_summary, status)
+VALUES (?, ?, ?, ?, ?, 'OPEN')
+""", (alert_id, feedback_id, data["department_id"], severity, summary))
+conn.commit()
+conn.close()
+return feedback_id
+if __name__ == "__main__":
+init_db()
+print("Database `hospital_demo.db` initialized successfully.")
